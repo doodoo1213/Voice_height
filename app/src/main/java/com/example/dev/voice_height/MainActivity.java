@@ -29,7 +29,6 @@ public class MainActivity extends ActionBarActivity implements OnClickListener{
     double highHz = 0;
     String pattern = "#####";
 
-
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
