@@ -1,186 +1,181 @@
 package com.example.dev.voice_height;
 
-import android.app.Activity;
-import android.graphics.Bitmap;
-import android.graphics.Canvas;
-import android.graphics.Color;
-import android.graphics.Paint;
 import android.media.AudioFormat;
 import android.media.AudioRecord;
 import android.media.MediaRecorder;
-import android.os.AsyncTask;
 import android.os.Bundle;
+import android.support.v7.app.ActionBarActivity;
 import android.util.Log;
 import android.view.View;
 import android.view.View.OnClickListener;
 import android.widget.Button;
-import android.widget.EditText;
-import android.widget.ImageView;
 import android.widget.TextView;
-import android.widget.Toast;
-import com.example.dev.voice_height.AppPreference;
 
-public class MainActivity extends Activity implements OnClickListener{
+import java.text.DecimalFormat;
 
-    int mcompare=0;
-    int frequency = 8000;
-    int channelConfiguration = AudioFormat.CHANNEL_CONFIGURATION_MONO;
-    int audioEncoding = AudioFormat.ENCODING_PCM_16BIT;
-    private RealDoubleFFT transformer;
-    private AppPreference mPref;
-    int blockSize=256;
-    Button startStopButton;
-    Button mSaveButton;
-    boolean started = false;
+public class MainActivity extends ActionBarActivity implements OnClickListener{
 
-    RecordAudio recordTask;
+    private static final int sampleRate = 8000; //Hz
+    private int bufferSize;
+    private AudioRecord audio;
+    private double lastLevel = 0;
+    private Thread thread;
+    private static final int SAMPLE_DELAY = 75;
 
-    ImageView imageView;
-    Bitmap bitmap;
-    Canvas canvas;
-    Paint paint;
-    TextView testview;
-    EditText medit;
+    Button BtStartStop;
+    TextView txtHz, txtHighHz;
+    boolean isStarted = false;
 
-    int result;
+    double highHz = 0;
+    String pattern = "#####";
+
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
 
-        mPref = new AppPreference(getApplicationContext());
+        //View 선언부
+        BtStartStop = (Button)findViewById(R.id.BtStartStop);
+        txtHz = (TextView)findViewById(R.id.txtHz);
+        txtHighHz = (TextView)findViewById(R.id.txtHighHz);
 
-        startStopButton = (Button)findViewById(R.id.StartStopButton);
-        startStopButton.setOnClickListener(this);
-        mSaveButton = (Button)findViewById(R.id.saveButton);
-        mSaveButton.setOnClickListener(this);
-
-        transformer = new RealDoubleFFT(blockSize);
-        imageView = (ImageView)findViewById(R.id.ImageView01);
-        testview = (TextView)findViewById(R.id.test);
-        medit = (EditText)findViewById(R.id.frequency);
+        //View 구현부
+        BtStartStop.setOnClickListener(this);
 
 
-        bitmap = Bitmap.createBitmap((int)256,(int)100,Bitmap.Config.ARGB_8888);
-        //그림 자르기(Bitmap source,int x, int y, int width, int height)
-        canvas = new Canvas(bitmap);
-        paint = new Paint();
-        paint.setColor(Color.GREEN);
-        imageView.setImageBitmap(bitmap);
 
-        String input = medit.getText().toString();
-        if (input.compareTo("") == 1) {
-            int a = Integer.parseInt(input);
-            mPref.addHZ(a);
+        initBufferSize();
+    }
+
+    /**
+     * 버퍼 초기화 하는 메소드
+     */
+    private void initBufferSize() {
+        try {
+            bufferSize = AudioRecord
+                    .getMinBufferSize(sampleRate, AudioFormat.CHANNEL_IN_MONO,
+                            AudioFormat.ENCODING_PCM_16BIT);
+        } catch (Exception e) {
+            Log.e("TrackingFlow", "Exception", e);
         }
-        //testview.setText(String.valueOf(result));
     }
 
 
-    @Override
-    protected void onPause() {
-        // TODO Auto-generated method stub
-        super.onPause();
-        mPref.getHZ();
+    /**
+     * Audio 멈추는 메소드
+     */
+    private void stopAudio() {
+        thread.interrupt();
+        thread = null;
+        try {
+            if (audio != null) {
+                audio.stop();
+                audio.release();
+                audio = null;
+
+                //// 변경 필요하면 넣으면 됨.
+                DecimalFormat decimalFormat = new DecimalFormat(pattern);      //정수만 출력되게 형 변환.
+                txtHighHz.setText("high Hz : "+decimalFormat.format(highHz)+"Hz");
+                highHz=0;      // high Hz를 초기화 함.
+            }
+        } catch (Exception e) {e.printStackTrace();}
     }
-    @Override
-    public void onStop(){
-        super.onStop();
 
+    /**
+     * Audio 인식하는 메소드
+     */
+    private void audioStart() {
+        audio = new AudioRecord(MediaRecorder.AudioSource.MIC, sampleRate,
+                AudioFormat.CHANNEL_IN_MONO,
+                AudioFormat.ENCODING_PCM_16BIT, bufferSize);
 
-    }
-    private class RecordAudio extends AsyncTask<Void, double[], Void> {
-        protected void onProgressUpdate(double[]... toTransform) {
-            canvas.drawColor(Color.BLACK);
+        audio.startRecording();
+        thread = new Thread(new Runnable() {
+            public void run() {
+                while(thread != null && !thread.isInterrupted()){
+                    //Let's make the thread sleep for a the approximate sampling time
+                    try{Thread.sleep(SAMPLE_DELAY);}catch(InterruptedException ie){ie.printStackTrace();}
+                    readAudioBuffer();//After this call we can get the last value assigned to the lastLevel variable
 
-            for (int i = 0; i < toTransform[0].length; i++)
-            {
+                    runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            if(highHz < lastLevel) {    // 최대값 변경 하는 코드
+                                highHz = lastLevel;
+                            }
 
-                int x = i;
-
-                int downy = (int) (100 - (toTransform[0][i] * 10));
-                int upy = 100;
-                int test1 = (int) (toTransform[0][i] * 100);
-
-                if(test1 > 2000){
-                    Log.e("주파수 : ",test1+"HZ");
+                            //Hz(?) 별로 값 나뉘게 적용하면 됨.
+                            if(lastLevel > 0 && lastLevel <= 10) {
+                                txtHz.setText("current Level : 10 dB");
+                            } else if(lastLevel > 10 && lastLevel <= 20){
+                                txtHz.setText("current Level : 20 dB");
+                            } else if(lastLevel > 20 && lastLevel <= 30){
+                                txtHz.setText("current Level : 30 dB");
+                            } else if(lastLevel > 30 && lastLevel <= 40){
+                                txtHz.setText("current Level : 40 dB");
+                            } else if(lastLevel > 40 && lastLevel <= 50){
+                                txtHz.setText("current Level : 50 dB");
+                            } else if(lastLevel > 50 && lastLevel <= 60){
+                                txtHz.setText("current Level : 60 dB");
+                            } else if(lastLevel > 80 && lastLevel <= 70){
+                               txtHz.setText("current Level : 70 dB");
+                            } else if(lastLevel > 70 && lastLevel <= 120){
+                                txtHz.setText("current Level : 120 dB");
+                            } else if(lastLevel > 120 && lastLevel <= 170){
+                                txtHz.setText("current Level : 170 dB");
+                            } else if(lastLevel > 170){
+                                txtHz.setText("current Level : 220 dB");
+                            }
+                        }
+                    });
                 }
-                if(test1>mcompare)
-                    mcompare=test1;
+            }
+        });
+        thread.start();
+    }
 
-                testview.setText(String.valueOf(mcompare));
-                canvas.drawLine(x, downy, x, upy, paint);
+    /**
+     * Functionality that gets the sound level out of the sample
+     */
+    private void readAudioBuffer() {
+
+        try {
+            short[] buffer = new short[bufferSize];
+
+            int bufferReadResult = 1;
+
+            if (audio != null) {
+
+                // Sense the voice...
+                bufferReadResult = audio.read(buffer, 0, bufferSize);
+                double sumLevel = 0;
+                for (int i = 0; i < bufferReadResult; i++) {
+                    sumLevel += buffer[i];
+                }
+                lastLevel = Math.abs((sumLevel / bufferReadResult));
             }
 
-
-            imageView.invalidate();
-        }
-        @Override
-        protected Void doInBackground(Void... params) {
-            try{
-                int bufferSize = AudioRecord.getMinBufferSize(frequency, channelConfiguration, audioEncoding);
-
-                AudioRecord audioRecord = new AudioRecord(
-                        MediaRecorder.AudioSource.VOICE_RECOGNITION,frequency,channelConfiguration,audioEncoding, bufferSize);
-
-                short[] buffer = new short[blockSize];
-                double[] toTransform = new double[blockSize];
-
-
-
-                audioRecord.startRecording();
-
-                while(started){
-                    int bufferReadResult = audioRecord.read(buffer,0,blockSize);
-
-                    for(int i = 0; i < blockSize && i < bufferReadResult; i++){
-
-
-                        toTransform[i] = (double)buffer[i] / Short.MAX_VALUE;
-
-                        //result = (int)toTransform[i];
-                        //testview.setText(String.valueOf(result));
-//         if(toTransform[i]>test){
-//          Log.e("", "" + toTransform[i]);
-//          test =  toTransform[i];
-//          result =  toTransform[i];
-//         }
-//         else{
-//          result = test;
-//         }
-                    }
-                    transformer.ft(toTransform);
-                    publishProgress(toTransform);
-                }
-                audioRecord.stop();
-            }catch(Throwable t){
-                Log.e("AudioRecord","Recording Failed");
-            }
-            return null;
+        } catch (Exception e) {
+            e.printStackTrace();
         }
     }
+
 
     @Override
     public void onClick(View v){
-
         switch (v.getId()) {
-            case R.id.StartStopButton:
-                if (started) {
-                    started = false;
-                    startStopButton.setText("Start");
-                    recordTask.cancel(true);
-                } else {
-                    started = true;
-                    startStopButton.setText("Stop");
-                    recordTask = new RecordAudio();
-                    recordTask.execute();
+            case R.id.BtStartStop:      //Start, Stop 버튼 클릭 시
+                if (isStarted) {        //Stop 버튼을 눌렀을 때
+                    BtStartStop.setText("Start");
+                    stopAudio();    // Audio 멈춤.
+                    isStarted = false;
+                } else {                //Start 버튼을 눌렀을 때
+                    BtStartStop.setText("Stop");
+                    audioStart();    // Audio 시작함.
+                    isStarted = true;
                 }
-                break;
-            case R.id.saveButton:
-                Toast.makeText(this, "저장되었습니다.", Toast.LENGTH_SHORT).show();
                 break;
         }
     }
-
 }
